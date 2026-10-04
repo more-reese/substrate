@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+.DS_Store
+.vscode/
+.idea/
+lenswork/
+
+# Runtime sandbox: your session state, trace, lexicon and generated artifacts
+substrate_workspace/
+
+# Local agent tooling config (machine-specific paths)
+.claude/

@@ -1,0 +1,10 @@
+# Language understanding
+anthropic>=1.0.0
+
+# Version graph. Automerge is the intended default: a real CRDT with true
+# branch/merge. The stable 0.1.2 sdist requires a Rust toolchain to build;
+# 1.0.0rc1 ships prebuilt wheels (macOS arm64/x86_64, Linux, Windows), so it is
+# the pin here. If it will not install on your platform, run with
+# `--backend jsonlog` — the append-only JSON-log store implements the same
+# VersionStore interface and needs nothing native.
+automerge==1.0.0rc1
