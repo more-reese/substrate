@@ -9,8 +9,9 @@ utterance calls for.
 
 The structured capture is the artifact. The outputs are disposable.
 
-    python substrate.py             # real parsing via the Anthropic API
-    python substrate.py --dry-run   # offline, rule-based parsing
+    python substrate.py             # REPL, real parsing via the Anthropic API
+    python substrate.py --dry-run   # REPL, offline rule-based parsing
+    python substrate.py agent "…"   # plan → act → check loop (Claude tool use)
 """
 
 from __future__ import annotations
@@ -45,6 +46,9 @@ def dim(text: str) -> str:
 
 HELP = """\
   substrate — everything below can be phrased naturally; these are just examples.
+
+  Agent mode is a separate command, not a sentence:
+    substrate agent "map the cooling loop"
 
   SYSTEM META-COMMANDS (a small fixed set)
     lock it in                      seal a milestone version
@@ -402,12 +406,16 @@ def run_turn(raw: str, ctx_parts) -> bool:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="substrate", description="Speak intent; capture structure; generate the rest."
+        prog="substrate",
+        description=(
+            "Speak intent; capture structure; generate the rest. "
+            'Omit the command for the REPL, or pass agent "goal" to build toward a goal.'
+        ),
     )
     ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="skip the Anthropic API and use rule-based parsing (offline smoke test)",
+        help="REPL only: skip the Anthropic API and use rule-based parsing",
     )
     ap.add_argument("--workspace", type=Path, default=config.WORKSPACE, help="sandbox directory")
     ap.add_argument(
@@ -416,26 +424,122 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=config.VERSION_BACKEND,
         help="version store implementation (default: automerge)",
     )
-    ap.add_argument("--model", default=config.MODEL_ID, help="Claude model id for parsing")
+    ap.add_argument("--model", default=config.MODEL_ID, help="Claude model id")
     ap.add_argument(
         "--yes",
         action="store_true",
         help="auto-confirm staging/production gates (for scripted demos)",
     )
+    ap.add_argument(
+        "--max-steps",
+        type=int,
+        default=config.AGENT_MAX_STEPS,
+        help="agent mode: stop after this many model calls (default: 20)",
+    )
+    ap.add_argument(
+        "--docs",
+        action="append",
+        default=None,
+        metavar="DIR",
+        help="agent mode: extra directory read_file may read (repeatable)",
+    )
+    ap.add_argument(
+        "command",
+        nargs="?",
+        choices=["agent"],
+        metavar="agent",
+        help="run agent mode instead of the REPL (omit for the REPL)",
+    )
+    ap.add_argument(
+        "goal",
+        nargs="?",
+        help='agent mode goal, in quotes (example: substrate agent "map the cooling loop")',
+    )
     return ap
+
+
+def open_workspace(args):
+    """Sandbox, version store, saved session, and lexicon — shared by both modes."""
+    paths = config.paths(args.workspace.resolve())
+    paths["workspace"].mkdir(parents=True, exist_ok=True)
+    store = vs.make_store(args.backend, paths["versions"])
+    store.init()
+    state = SessionState.load(paths["state"], assume_yes=args.yes)
+    state._trace_path = paths["trace"]  # for `describe`
+    lex = Lexicon(paths["lexicon"])
+    return paths, store, state, lex
+
+
+def run_agent_cli(args) -> int:
+    """`substrate agent "<goal>"` — plan, act, check, then the usual outputs."""
+    import agent as agent_mod
+
+    if args.dry_run:
+        print(
+            "  ! agent mode calls Claude with tools. --dry-run stays on the REPL parser;\n"
+            "    run without --dry-run once ANTHROPIC_API_KEY is set."
+        )
+        return 2
+    goal = (args.goal or "").strip()
+    if not goal:
+        print('  ! substrate agent needs a goal. Example: substrate agent "map the cooling loop"')
+        return 2
+    if args.max_steps < 1:
+        print("  ! --max-steps must be at least 1")
+        return 2
+
+    client, warning = agent_mod.make_agent_client(args.model)
+    if client is None:
+        print(f"  ! {warning}")
+        return 2
+
+    paths, store, state, lex = open_workspace(args)
+    roots = [paths["workspace"]]
+    docs = config.PROJECT_ROOT / "docs"
+    if docs.is_dir():
+        roots.append(docs)
+    for extra in args.docs or []:
+        roots.append(Path(extra))
+
+    print()
+    print(f"{BOLD}substrate agent{RESET} — plan, act, check.")
+    print(dim(f"  goal: {goal}"))
+    print(
+        dim(
+            f"  model={args.model}  versions={store.backend_name}  "
+            f"workspace={paths['workspace']}  max_steps={args.max_steps}"
+        )
+    )
+    print()
+
+    session = agent_mod.AgentSession(
+        store=store,
+        state=state,
+        paths=paths,
+        goal=goal,
+        read_roots=roots,
+        lexicon_text=lex.render_for_prompt(),
+        max_steps=args.max_steps,
+    )
+    try:
+        report = agent_mod.run_agent(session, client)
+    except KeyboardInterrupt:
+        print()
+        state.save(paths["state"])
+        print(dim("  interrupted"))
+        return 130
+    return agent_mod.exit_code(report)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    paths = config.paths(args.workspace.resolve())
-    paths["workspace"].mkdir(parents=True, exist_ok=True)
+    if args.command == "agent":
+        return run_agent_cli(args)
+    return run_repl(args)
 
-    store = vs.make_store(args.backend, paths["versions"])
-    store.init()
 
-    state = SessionState.load(paths["state"], assume_yes=args.yes)
-    state._trace_path = paths["trace"]  # for `describe`
-    lex = Lexicon(paths["lexicon"])
+def run_repl(args) -> int:
+    paths, store, state, lex = open_workspace(args)
 
     parser, warning = parser_mod.make_parser(args.dry_run, args.model)
 
