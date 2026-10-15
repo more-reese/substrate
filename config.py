@@ -26,6 +26,18 @@ EFFORT = "low"
 REQUEST_TIMEOUT = 45.0
 MAX_RETRIES = 1
 
+# --- Agent mode -------------------------------------------------------------
+
+# One plan → act → check round is one model call. The loop stops when the
+# graph checks pass and the model finishes, or when this many calls have run.
+AGENT_MAX_STEPS = 20
+
+# read_file will not return more than this many bytes of a document.
+AGENT_READ_MAX_BYTES = 100_000
+
+# A tool round can legitimately take longer than a single-sentence parse.
+AGENT_REQUEST_TIMEOUT = 120.0
+
 # --- Sandbox ----------------------------------------------------------------
 
 # Every file substrate writes lives under here. Nothing is ever written
